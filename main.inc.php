@@ -1,8 +1,8 @@
 <?php
 /*
 Plugin Name: Copy Image URL
-Version: 16.d
-Description: Adds buttons on the public Piwigo photo page to copy the direct URL of the original image and an XL derivative.
+Version: 16.e
+Description: Adds direct image URL tools on the public Piwigo photo page, including original and XL URLs.
 Plugin URI: auto
 Author: benoit7700
 Author URI: https://github.com/benoit7700
@@ -33,12 +33,10 @@ function ciu_loc_end_picture()
 
   $current = $picture['current'];
 
-  // Build the absolute URL of the original image using Piwigo's own URL helper.
   set_make_full_url();
   $original_url = get_element_url($current);
   unset_make_full_url();
 
-  // Build an XL derivative URL when possible.
   $xl_url = '';
   try
   {
@@ -61,63 +59,106 @@ function ciu_loc_end_picture()
     $xl_url = '';
   }
 
-  // Add buttons through Piwigo's native toolbar extension point.
-  // This is supported by the default theme and by Stripped.
-  $original_js = json_encode($original_url, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
-  $button_original =
-    '<a href="#" title="Copier l\'URL directe de l\'image originale" '.
-    'onclick="ciuCopyUrl('.htmlspecialchars($original_js, ENT_QUOTES, 'UTF-8').'); return false;">'.
-    'URL originale</a>';
+  $template->assign(array(
+    'CIU_ORIGINAL_URL' => $original_url,
+    'CIU_XL_URL' => $xl_url,
+  ));
 
-  $template->append('PLUGIN_PICTURE_BUTTONS', $button_original);
-
-  if (!empty($xl_url))
-  {
-    $xl_js = json_encode($xl_url, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
-    $button_xl =
-      '<a href="#" title="Copier l\'URL de la taille XL" '.
-      'onclick="ciuCopyUrl('.htmlspecialchars($xl_js, ENT_QUOTES, 'UTF-8').'); return false;">'.
-      'URL XL</a>';
-
-    $template->append('PLUGIN_PICTURE_BUTTONS', $button_xl);
-  }
-
-  // Inline JavaScript deliberately avoids the Clipboard API dependency on HTTPS.
-  // If direct clipboard access is unavailable, a prompt displays the URL for manual copy.
-  $template->append(
-    'PLUGIN_PICTURE_BEFORE',
-    '<script>
-function ciuCopyUrl(url) {
-  function showUrl() {
-    window.prompt("URL directe de l\'image (Ctrl+C puis Entrée) :", url);
-  }
-
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(url).then(function() {
-      alert("URL copiée dans le presse-papiers.");
-    }).catch(showUrl);
-    return;
-  }
-
-  var ta = document.createElement("textarea");
-  ta.value = url;
-  ta.setAttribute("readonly", "");
-  ta.style.position = "fixed";
-  ta.style.left = "-9999px";
-  document.body.appendChild(ta);
-  ta.select();
-
-  var ok = false;
-  try { ok = document.execCommand("copy"); } catch (e) {}
-  document.body.removeChild(ta);
-
-  if (ok) {
-    alert("URL copiée dans le presse-papiers.");
-  } else {
-    showUrl();
-  }
+  $template->set_prefilter('picture', 'ciu_picture_prefilter');
 }
-</script>'
-  );
+
+function ciu_picture_prefilter($content)
+{
+  $block = <<<'TPL'
+{if isset($CIU_ORIGINAL_URL)}
+<style>
+#ciuExifBlock{margin-top:12px}
+#ciuExifBlock .ciuRow{margin:6px 0}
+#ciuExifBlock button{
+  padding:4px 8px;
+  margin:2px 4px 2px 0;
+  cursor:pointer;
+  font-size:.9em
+}
+#ciuExifBlock .ciuValue{
+  display:block;
+  margin-top:4px;
+  font-size:.85em;
+  word-break:break-all;
+  opacity:.85
+}
+</style>
+
+<dl id="ciuExifBlock" class="imageInfoTable">
+  <h3>Liens image</h3>
+  <div class="imageInfo ciuRow">
+    <dt>Originale</dt>
+    <dd>
+      <button type="button" class="ciu-copy" data-url="{$CIU_ORIGINAL_URL|escape:'html'}">Copier URL originale</button>
+      <span class="ciuValue">{$CIU_ORIGINAL_URL|escape:'html'}</span>
+    </dd>
+  </div>
+  {if !empty($CIU_XL_URL)}
+  <div class="imageInfo ciuRow">
+    <dt>XL</dt>
+    <dd>
+      <button type="button" class="ciu-copy" data-url="{$CIU_XL_URL|escape:'html'}">Copier URL XL</button>
+      <span class="ciuValue">{$CIU_XL_URL|escape:'html'}</span>
+    </dd>
+  </div>
+  {/if}
+</dl>
+
+<script>
+(function(){
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly','');
+    ta.style.position='fixed';
+    ta.style.left='-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+    if (!ok) window.prompt("URL directe de l'image :", text);
+  }
+
+  document.addEventListener('click', function(e){
+    var btn = e.target.closest('.ciu-copy');
+    if (!btn) return;
+    var url = btn.getAttribute('data-url');
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url).catch(function(){ fallbackCopy(url); });
+    } else {
+      fallbackCopy(url);
+    }
+  });
+})();
+</script>
+{/if}
+TPL;
+
+  // Preferred placement for default-like themes: just before metadata/EXIF.
+  if (strpos($content, '{if isset($metadata)}') !== false)
+  {
+    $content = str_replace('{if isset($metadata)}', $block . "
+{if isset($metadata)}", $content);
+    return $content;
+  }
+
+  // Stripped theme: insert before the metadata tabs section if present.
+  $marker = "{if isset($metadata)}
+					{foreach from=$metadata item=meta key=id}";
+  if (strpos($content, $marker) !== false)
+  {
+    return str_replace($marker, $block . "
+" . $marker, $content);
+  }
+
+  // Fallback: append at end of the photo template.
+  return $content . "
+" . $block;
 }
 ?>
