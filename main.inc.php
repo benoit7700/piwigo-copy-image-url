@@ -1,7 +1,7 @@
 <?php
 /*
 Plugin Name: Copy Image URL
-Version: 16.f
+Version: 16.g
 Description: Adds direct image URL tools on the public Piwigo photo page, including original and XL URLs.
 Plugin URI: auto
 Author: benoit7700
@@ -144,6 +144,18 @@ function ciu_loc_end_picture()
 })();
 </script>';
 
-  $template->append('PLUGIN_PICTURE_AFTER', $html);
+  // PLUGIN_PICTURE_AFTER is rendered as a scalar in Piwigo themes.
+  // Using append() turns it into an array and causes "Array to string conversion".
+  $existing = $template->get_template_vars('PLUGIN_PICTURE_AFTER');
+  if (is_array($existing))
+  {
+    $existing = implode("\n", $existing);
+  }
+  if (!is_string($existing))
+  {
+    $existing = '';
+  }
+
+  $template->assign('PLUGIN_PICTURE_AFTER', $existing . $html);
 }
 ?>
