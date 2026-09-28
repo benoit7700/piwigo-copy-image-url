@@ -1,7 +1,7 @@
 <?php
 /*
 Plugin Name: Copy Image URL
-Version: 16.a
+Version: 16.d
 Description: Adds buttons on the public Piwigo photo page to copy the direct URL of the original image and an XL derivative.
 Plugin URI: auto
 Author: benoit7700
@@ -33,10 +33,12 @@ function ciu_loc_end_picture()
 
   $current = $picture['current'];
 
-  // Build absolute URLs with Piwigo's own URL helpers.
+  // Build the absolute URL of the original image using Piwigo's own URL helper.
   set_make_full_url();
   $original_url = get_element_url($current);
+  unset_make_full_url();
 
+  // Build an XL derivative URL when possible.
   $xl_url = '';
   try
   {
@@ -48,6 +50,10 @@ function ciu_loc_end_picture()
     if ($xl)
     {
       $xl_url = $xl->get_url();
+      if (!url_is_remote($xl_url))
+      {
+        $xl_url = get_absolute_root_url() . ltrim($xl_url, '/');
+      }
     }
   }
   catch (Exception $e)
@@ -55,83 +61,63 @@ function ciu_loc_end_picture()
     $xl_url = '';
   }
 
-  unset_make_full_url();
+  // Add buttons through Piwigo's native toolbar extension point.
+  // This is supported by the default theme and by Stripped.
+  $original_js = json_encode($original_url, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
+  $button_original =
+    '<a href="#" title="Copier l\'URL directe de l\'image originale" '.
+    'onclick="ciuCopyUrl('.htmlspecialchars($original_js, ENT_QUOTES, 'UTF-8').'); return false;">'.
+    'URL originale</a>';
 
-  if (!empty($xl_url) && !url_is_remote($xl_url))
+  $template->append('PLUGIN_PICTURE_BUTTONS', $button_original);
+
+  if (!empty($xl_url))
   {
-    $xl_url = get_absolute_root_url() . ltrim($xl_url, '/');
+    $xl_js = json_encode($xl_url, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_AMP|JSON_HEX_QUOT);
+    $button_xl =
+      '<a href="#" title="Copier l\'URL de la taille XL" '.
+      'onclick="ciuCopyUrl('.htmlspecialchars($xl_js, ENT_QUOTES, 'UTF-8').'); return false;">'.
+      'URL XL</a>';
+
+    $template->append('PLUGIN_PICTURE_BUTTONS', $button_xl);
   }
 
-  $template->assign(array(
-    'CIU_ORIGINAL_URL' => $original_url,
-    'CIU_XL_URL' => $xl_url,
-  ));
+  // Inline JavaScript deliberately avoids the Clipboard API dependency on HTTPS.
+  // If direct clipboard access is unavailable, a prompt displays the URL for manual copy.
+  $template->append(
+    'PLUGIN_PICTURE_BEFORE',
+    '<script>
+function ciuCopyUrl(url) {
+  function showUrl() {
+    window.prompt("URL directe de l\'image (Ctrl+C puis Entrée) :", url);
+  }
 
-  $template->set_prefilter('picture', 'ciu_picture_prefilter');
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(url).then(function() {
+      alert("URL copiée dans le presse-papiers.");
+    }).catch(showUrl);
+    return;
+  }
+
+  var ta = document.createElement("textarea");
+  ta.value = url;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) {}
+  document.body.removeChild(ta);
+
+  if (ok) {
+    alert("URL copiée dans le presse-papiers.");
+  } else {
+    showUrl();
+  }
 }
-
-function ciu_picture_prefilter($content)
-{
-  $block = <<<'TPL'
-{if isset($CIU_ORIGINAL_URL)}
-<style>
-#ciu-url-tools{margin:14px auto;padding:12px 14px;max-width:980px;border:1px solid rgba(128,128,128,.35);border-radius:8px;text-align:center}
-#ciu-url-tools .ciu-title{font-weight:600;margin-bottom:8px}
-#ciu-url-tools button{margin:3px 5px;padding:7px 12px;cursor:pointer}
-#ciu-url-tools .ciu-url{display:block;margin:8px auto 0;max-width:900px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.9em;opacity:.85}
-#ciu-url-tools .ciu-status{margin-left:6px;font-size:.9em}
-</style>
-<div id="ciu-url-tools">
-  <div class="ciu-title">URL de l'image</div>
-  <button type="button" class="ciu-copy" data-url="{$CIU_ORIGINAL_URL|escape:'html'}">Copier URL originale</button>
-  {if !empty($CIU_XL_URL)}
-    <button type="button" class="ciu-copy" data-url="{$CIU_XL_URL|escape:'html'}">Copier URL XL</button>
-  {/if}
-  <span class="ciu-status" aria-live="polite"></span>
-  <span class="ciu-url">{$CIU_ORIGINAL_URL|escape:'html'}</span>
-</div>
-<script>
-(function(){
-  var box = document.getElementById('ciu-url-tools');
-  if (!box) return;
-  var status = box.querySelector('.ciu-status');
-
-  function fallbackCopy(text) {
-    var ta = document.createElement('textarea');
-    ta.value = text;
-    ta.setAttribute('readonly','');
-    ta.style.position='fixed';
-    ta.style.opacity='0';
-    document.body.appendChild(ta);
-    ta.select();
-    var ok = false;
-    try { ok = document.execCommand('copy'); } catch(e) {}
-    document.body.removeChild(ta);
-    return ok;
-  }
-
-  box.addEventListener('click', function(e){
-    var btn = e.target.closest('.ciu-copy');
-    if (!btn) return;
-    var url = btn.getAttribute('data-url');
-    var done = function(ok){
-      status.textContent = ok ? 'URL copiée' : 'Copie impossible';
-      setTimeout(function(){ status.textContent=''; }, 1800);
-    };
-
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(url)
-        .then(function(){ done(true); })
-        .catch(function(){ done(fallbackCopy(url)); });
-    } else {
-      done(fallbackCopy(url));
-    }
-  });
-})();
-</script>
-{/if}
-TPL;
-
-  return $content . "\n" . $block;
+</script>'
+  );
 }
 ?>
